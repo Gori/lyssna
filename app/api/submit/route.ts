@@ -9,10 +9,13 @@ const STT_URL = "https://api.elevenlabs.io/v1/speech-to-text";
 // transcription_id (webhook=true). The audio never passes through this
 // function, and the call returns in well under any Vercel timeout.
 export async function POST(request: Request) {
-  const apiKey = process.env.ELEVENLABS_API_KEY;
+  const apiKey = process.env.ELEVENLABS_API_KEY?.trim();
   if (!apiKey) {
     return Response.json(
-      { error: "Server missing ELEVENLABS_API_KEY." },
+      {
+        error:
+          "Server has no ELEVENLABS_API_KEY. Set it in Vercel → Settings → Environment Variables (Production) and redeploy.",
+      },
       { status: 500 },
     );
   }
@@ -72,6 +75,9 @@ export async function POST(request: Request) {
       /* keep generic */
     }
     console.error("[submit] not ok:", res.status, detail);
+    if (res.status === 401) {
+      detail = `ElevenLabs rejected the key (${detail}). The ELEVENLABS_API_KEY in Vercel is wrong/old/whitespace, or lacks Speech to Text permission. Fix it in Vercel env vars and redeploy.`;
+    }
     return Response.json({ error: detail }, { status: res.status });
   }
 

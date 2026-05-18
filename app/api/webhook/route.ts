@@ -32,8 +32,8 @@ async function readJob(
 }
 
 export async function POST(request: Request) {
-  const apiKey = process.env.ELEVENLABS_API_KEY;
-  const secret = process.env.ELEVENLABS_WEBHOOK_SECRET;
+  const apiKey = process.env.ELEVENLABS_API_KEY?.trim();
+  const secret = process.env.ELEVENLABS_WEBHOOK_SECRET?.trim();
   if (!apiKey || !secret) {
     console.error("[webhook] missing ELEVENLABS_API_KEY or _WEBHOOK_SECRET");
     return new Response("server not configured", { status: 500 });
