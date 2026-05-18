@@ -35,6 +35,10 @@ export async function POST(request: Request) {
     return Response.json({ error: "Missing uploaded file." }, { status: 400 });
   }
 
+  // Our own correlation id. ElevenLabs echoes webhook_metadata back in the
+  // webhook, so we never have to guess at their payload shape.
+  const jobId = crypto.randomUUID();
+
   const form = new FormData();
   form.set("cloud_storage_url", blobUrl);
   form.set("model_id", "scribe_v2");
@@ -43,6 +47,7 @@ export async function POST(request: Request) {
   form.set("tag_audio_events", "true");
   form.set("no_verbatim", "true");
   form.set("webhook", "true");
+  form.set("webhook_metadata", JSON.stringify({ jobId }));
   const ns = Number.parseInt(String(numSpeakers ?? ""), 10);
   if (Number.isInteger(ns) && ns >= 1 && ns <= 32) {
     form.set("num_speakers", String(ns));
@@ -90,12 +95,13 @@ export async function POST(request: Request) {
     );
   }
 
-  // Persist the mapping so the webhook knows which audio to delete and what to
-  // name the transcript. Written before responding so it always precedes the
-  // (minutes-later) webhook callback.
+  // Keyed by OUR jobId (echoed back via webhook_metadata). Stores the
+  // ElevenLabs transcription_id so the webhook fetches the right transcript
+  // without parsing their payload. Written before responding, so it always
+  // precedes the (minutes-later) webhook callback.
   await put(
-    `jobs/${id}.json`,
-    JSON.stringify({ blobUrl, filename }),
+    `jobs/${jobId}.json`,
+    JSON.stringify({ blobUrl, filename, transcriptionId: id }),
     {
       access: "public",
       addRandomSuffix: false,
@@ -104,5 +110,5 @@ export async function POST(request: Request) {
     },
   );
 
-  return Response.json({ transcriptionId: id });
+  return Response.json({ jobId });
 }

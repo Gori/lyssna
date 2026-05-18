@@ -319,7 +319,7 @@ export default function Home() {
       }
 
       // 3. Poll until the webhook has stored the finished transcript.
-      const id: string = sdata.transcriptionId;
+      const id: string = sdata.jobId;
       const deadline = Date.now() + 40 * 60 * 1000;
       while (Date.now() < deadline) {
         await sleep(5000);
