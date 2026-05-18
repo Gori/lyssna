@@ -88,7 +88,10 @@ function renderMarkdown(md: string): ReactNode[] {
     if (para.length) {
       const text = para.join(" ");
       blocks.push(
-        <p key={`p${k++}`} className="mt-3 text-[15px] leading-relaxed text-ink">
+        <p
+          key={`p${k++}`}
+          className="mt-3 font-mono text-[13.5px] leading-relaxed text-ink"
+        >
           {inline(text, `p${k}`)}
         </p>,
       );
@@ -104,7 +107,7 @@ function renderMarkdown(md: string): ReactNode[] {
       blocks.push(
         <h2
           key={`h${k++}`}
-          className="text-[20px] font-bold tracking-tight text-ink"
+          className="font-mono text-[18px] font-bold tracking-tight text-ink"
         >
           {line.slice(2)}
         </h2>,
@@ -114,7 +117,7 @@ function renderMarkdown(md: string): ReactNode[] {
       blocks.push(
         <h3
           key={`h${k++}`}
-          className="mt-7 text-[15px] font-bold text-teal"
+          className="mt-7 font-mono text-[14px] font-bold text-teal"
         >
           {line.slice(3)}
         </h3>,
