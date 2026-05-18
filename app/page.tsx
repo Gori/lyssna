@@ -9,6 +9,9 @@ import {
   type ReactNode,
 } from "react";
 import { jsPDF } from "jspdf";
+import { upload } from "@vercel/blob/client";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type Status = "idle" | "ready" | "working" | "done" | "error";
 
@@ -292,24 +295,62 @@ export default function Home() {
     setStatus("working");
     setErrorMsg("");
     try {
-      const body = new FormData();
-      body.set("file", file);
-      const n = Number.parseInt(numSpeakers, 10);
-      if (Number.isInteger(n) && n >= 1 && n <= 32) {
-        body.set("num_speakers", String(n));
-      }
-      const res = await fetch("/api/transcribe", { method: "POST", body });
-      const data = await res.json();
-      if (!res.ok) {
-        setErrorMsg(data?.error || `Request failed (${res.status}).`);
+      // 1. Upload straight from the browser to Vercel Blob (no 4.5 MB cap).
+      const blob = await upload(`uploads/${file.name}`, file, {
+        access: "public",
+        handleUploadUrl: "/api/blob-upload",
+      });
+
+      // 2. Hand the blob URL to the server, which submits it to ElevenLabs.
+      const sres = await fetch("/api/submit", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          blobUrl: blob.url,
+          filename: file.name,
+          numSpeakers,
+        }),
+      });
+      const sdata = await sres.json();
+      if (!sres.ok) {
+        setErrorMsg(sdata?.error || `Submit failed (${sres.status}).`);
         setStatus("error");
         return;
       }
-      setResult(data as Result);
-      setStatus("done");
-    } catch {
+
+      // 3. Poll until the webhook has stored the finished transcript.
+      const id: string = sdata.transcriptionId;
+      const deadline = Date.now() + 40 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await sleep(5000);
+        let d: { status?: string; error?: string } & Partial<Result>;
+        try {
+          const r = await fetch(`/api/result?id=${encodeURIComponent(id)}`, {
+            cache: "no-store",
+          });
+          d = await r.json();
+        } catch {
+          continue; // transient network blip — keep polling
+        }
+        if (d.status === "done" && d.markdown) {
+          setResult(d as Result);
+          setStatus("done");
+          return;
+        }
+        if (d.status === "error") {
+          setErrorMsg(d.error || "Transcription failed.");
+          setStatus("error");
+          return;
+        }
+      }
       setErrorMsg(
-        "The request was interrupted. Long recordings can take several minutes — try again.",
+        "This is taking unusually long (over 40 minutes). It may still finish in your ElevenLabs history.",
+      );
+      setStatus("error");
+    } catch (err) {
+      setErrorMsg(
+        (err as Error)?.message ||
+          "Upload was interrupted. Check your connection and try again.",
       );
       setStatus("error");
     }
