@@ -4,7 +4,7 @@ import { toMarkdown, LANGUAGE_NAMES, type ScribeResponse } from "@/lib/markdown"
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 60;
 
 const TRANSCRIPT_URL = (id: string) =>
   `https://api.elevenlabs.io/v1/speech-to-text/transcripts/${id}`;
@@ -29,6 +29,21 @@ async function loadJob(jobId: string): Promise<Job | null> {
   }
 }
 
+// The webhook delivers the full transcript inline. Find the ScribeResponse-ish
+// object anywhere in the verified event rather than assuming its exact path.
+function findTranscript(obj: unknown, depth = 0): ScribeResponse | null {
+  if (!obj || typeof obj !== "object" || depth > 6) return null;
+  const o = obj as Record<string, unknown>;
+  if (Array.isArray(o.words) || typeof o.text === "string") {
+    return o as ScribeResponse;
+  }
+  for (const v of Object.values(o)) {
+    const found = findTranscript(v, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
 async function writeResult(jobId: string, payload: unknown) {
   await put(`results/${jobId}.json`, JSON.stringify(payload), {
     access: "public",
@@ -50,19 +65,21 @@ export async function POST(request: Request) {
   const sig = request.headers.get("elevenlabs-signature") ?? "";
   console.log("[webhook] received bytes=", raw.length, "hasSig=", !!sig);
 
+  let event: unknown;
   try {
     const client = new ElevenLabsClient({ apiKey });
-    await client.webhooks.constructEvent(raw, sig, secret);
+    event = await client.webhooks.constructEvent(raw, sig, secret);
+    console.log("[webhook] signature verified");
   } catch (err) {
     console.error("[webhook] signature verification failed:", err);
     return new Response("invalid signature", { status: 401 });
   }
 
-  // Find OUR jobId: every uuid in the verified body is a candidate; the one
-  // with a matching jobs/ blob is ours. Shape-independent on purpose.
+  // Our jobId is whatever uuid in the body maps to a jobs/ blob.
   const candidates = [...new Set(raw.match(UUID_RE) ?? [])].map((s) =>
     s.toLowerCase(),
   );
+  console.log("[webhook] uuid candidates=", candidates.length);
   let jobId: string | null = null;
   let job: Job | null = null;
   for (const c of candidates) {
@@ -73,25 +90,28 @@ export async function POST(request: Request) {
       break;
     }
   }
-
   if (!jobId || !job) {
-    console.error(
-      "[webhook] no matching job. uuids=",
-      candidates,
-      "bodyHead=",
-      raw.slice(0, 400),
-    );
-    return new Response("ok", { status: 200 }); // ack; nothing we can map
+    console.error("[webhook] no matching job. bodyHead=", raw.slice(0, 300));
+    return new Response("ok", { status: 200 });
   }
+  console.log("[webhook] matched job", jobId);
 
   try {
-    const tid = job.transcriptionId;
-    if (!tid) throw new Error("job missing transcriptionId");
-    const res = await fetch(TRANSCRIPT_URL(tid), {
-      headers: { "xi-api-key": apiKey },
-    });
-    if (!res.ok) throw new Error(`get-transcript ${res.status}`);
-    const data = (await res.json()) as ScribeResponse;
+    // Prefer the transcript already in the webhook; only fetch as a fallback.
+    let data = findTranscript(event) ?? findTranscript(JSON.parse(raw));
+    if (data) {
+      console.log("[webhook] using inline transcript");
+    } else if (job.transcriptionId) {
+      console.log("[webhook] fetching transcript", job.transcriptionId);
+      const res = await fetch(TRANSCRIPT_URL(job.transcriptionId), {
+        headers: { "xi-api-key": apiKey },
+      });
+      if (!res.ok) throw new Error(`get-transcript ${res.status}`);
+      data = (await res.json()) as ScribeResponse;
+    } else {
+      throw new Error("no transcript in payload and no transcriptionId");
+    }
+
     const durationSecs = data.audio_duration_secs ?? 0;
     const { markdown, speakerCount, wordCount } = toMarkdown(
       data,
@@ -112,7 +132,7 @@ export async function POST(request: Request) {
         wordCount,
       },
     });
-    console.log("[webhook] stored result for job", jobId);
+    console.log("[webhook] stored result for", jobId);
   } catch (err) {
     console.error("[webhook] processing failed for", jobId, err);
     await writeResult(jobId, {
